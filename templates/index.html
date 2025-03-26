@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Book-to-Podcast Explorer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="sidebar">
+        <div class="logo">
+          <h1>Book Explorers</h1>
+        </div>
+
+        <!-- Upload Section -->
+        <div class="upload-section">
+          <h2>Upload a Book</h2>
+          <form id="upload-form" enctype="multipart/form-data">
+            <div class="file-input">
+              <label for="book-file">Choose a book file (PDF, EPUB, DOCX)</label>
+              <input
+                type="file"
+                id="book-file"
+                name="file"
+                accept=".pdf,.epub,.docx"
+              />
+            </div>
+
+            <div class="grade-select">
+              <label for="grade-level">Select Grade Level:</label>
+              <select id="grade-level" name="grade_level">
+                <option value="kindergarten">Kindergarten - 1st Grade</option>
+                <option value="elementary">2nd - 3rd Grade</option>
+                <option value="middle school" selected>4th - 5th Grade</option>
+                <option value="middle school">6th - 7th Grade</option>
+                <option value="high school">8th - 9th Grade</option>
+                <option value="high school">10th - 12th Grade</option>
+              </select>
+            </div>
+
+            <button type="submit" class="primary-button">Upload and Process</button>
+          </form>
+        </div>
+      </div>
+
+      <div class="main-content">
+        <!-- Podcast Player -->
+        <div class="podcast-section">
+          <h2>🎧 AI Podcast Player</h2>
+          <div id="podcast-player">
+            <div class="welcome-message">
+              <h2>Welcome to Book Explorers!</h2>
+              <p>Upload a book on the left to start your learning adventure!</p>
+            </div>
+
+            <div class="processing-message" style="display: none">
+              <h2>🔄 Processing your book...</h2>
+              <p>Please wait while we create your educational podcast!</p>
+            </div>
+
+            <div class="audio-container" style="display: none">
+              <audio id="audioPlayer" controls style="width: 100%; margin: 20px 0;"></audio>
+              <button id="generateButton" class="primary-button" style="margin-right: 10px;">
+                🎙️ Generate Podcast
+              </button>
+              <button id="downloadButton" class="primary-button">
+                ⬇️ Download Podcast
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chat Interface -->
+        <div class="chat-section">
+          <h2>💬 Chat About This Book</h2>
+          <div id="chat-messages" class="chat-messages">
+            <!-- Messages will be dynamically added here -->
+          </div>
+
+          <div class="chat-input">
+            <input
+              type="text"
+              id="message-input"
+              placeholder="Ask a question about the book..."
+            />
+            <button id="send-btn" class="primary-button">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  </body>
+</html>
