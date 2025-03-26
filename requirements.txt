@@ -3,8 +3,10 @@ PyPDF2==3.0.1
 EbookLib==0.17.1
 python-docx==0.8.11
 Werkzeug==2.0.1
-openai==1.12.0
-python-dotenv==1.0.0
-tiktoken==0.6.0
-gTTS==2.5.1
-gunicorn==21.2.0
+# pdftotext==2.2.2
+openai
+python-dotenv
+tiktoken
+gTTS
+gunicorn
+
