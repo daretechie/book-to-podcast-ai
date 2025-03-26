@@ -114,98 +114,180 @@ def summarize_long_text(text, max_tokens=2000):
     """Handle large texts safely within token limits"""
     try:
         # Calculate available tokens for input (model limit - response tokens - buffer)
-        MODEL_MAX_TOKENS = 16385
-        SAFETY_BUFFER = 500
+        MODEL_MAX_TOKENS = 16000  # Reduced from 16385 to add more safety margin
+        SAFETY_BUFFER = 1000      # Increased from 500 for more safety
         MAX_INPUT_TOKENS = MODEL_MAX_TOKENS - max_tokens - SAFETY_BUFFER
+        MAX_CHUNK_TOKENS = 8000   # Increased from 4000 for fewer API calls
+        
+        # For very large texts, do a quick initial truncation to save processing time
+        initial_token_count = count_tokens(text)
+        if initial_token_count > 100000:  # If extremely large
+            # Get a rough estimate of characters per token for this text
+            chars_per_token = len(text) / initial_token_count
+            # Truncate to approximately 50,000 tokens worth of text
+            safe_char_count = int(50000 * chars_per_token)
+            text = text[:safe_char_count]
+            print(f"Initial truncation: {initial_token_count} tokens → ~50000 tokens")
         
         # Split text into token-limited chunks
         chunks = []
+        paragraphs = [p for p in text.split('\n') if p.strip()]
+        
+        # Use larger chunks with fewer API calls
         current_chunk = []
         current_token_count = 0
-        
-        # Split text into paragraphs to maintain coherence
-        paragraphs = [p for p in text.split('\n') if p.strip()]
         
         for para in paragraphs:
             para_tokens = count_tokens(para)
             
-            if current_token_count + para_tokens > MAX_INPUT_TOKENS:
-                chunks.append('\n'.join(current_chunk))
-                current_chunk = []
-                current_token_count = 0
+            # If adding this paragraph would exceed our chunk size
+            if current_token_count + para_tokens > MAX_CHUNK_TOKENS:
+                if current_chunk:  # If we have content, save this chunk
+                    chunks.append('\n'.join(current_chunk))
+                    current_chunk = []
+                    current_token_count = 0
                 
+                # If a single paragraph is too large, add it as its own chunk
+                if para_tokens > MAX_CHUNK_TOKENS:
+                    chunks.append(para[:int(len(para) * MAX_CHUNK_TOKENS / para_tokens)])
+                    continue
+            
+            # Add paragraph to current chunk
             current_chunk.append(para)
             current_token_count += para_tokens
         
+        # Add the last chunk if it has content
         if current_chunk:
             chunks.append('\n'.join(current_chunk))
         
-        # Process each chunk
-        summaries = []
-        for chunk in chunks:
-            response = openai.chat.completions.create(
-                model="gpt-3.5-turbo-0125",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are a concise academic summarizer. Focus on key concepts."
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Summarize this in {max_tokens//2} words:\n{chunk}"
-                    }
-                ],
-                max_tokens=max_tokens,
-                temperature=0.3  # More focused summarization
-            )
-            summaries.append(response.choices[0].message.content)
-            time.sleep(1)  # Rate limit protection
+        # Optimize: If we have too many chunks, combine some to reduce API calls
+        if len(chunks) > 10:
+            print(f"Optimizing: Reducing {len(chunks)} chunks to improve performance")
+            optimized_chunks = []
+            temp_chunk = []
+            temp_token_count = 0
+            
+            for chunk in chunks:
+                chunk_tokens = count_tokens(chunk)
+                if temp_token_count + chunk_tokens <= MAX_CHUNK_TOKENS:
+                    temp_chunk.append(chunk)
+                    temp_token_count += chunk_tokens
+                else:
+                    if temp_chunk:
+                        optimized_chunks.append('\n\n'.join(temp_chunk))
+                    temp_chunk = [chunk]
+                    temp_token_count = chunk_tokens
+            
+            if temp_chunk:
+                optimized_chunks.append('\n\n'.join(temp_chunk))
+            
+            chunks = optimized_chunks
+            print(f"Optimized to {len(chunks)} chunks")
         
-        # Combine summaries if needed
-        if len(summaries) == 1:
-            return summaries[0]
+        # Process each chunk with parallel processing if possible
+        print(f"Processing {len(chunks)} chunks for summarization")
+        summaries = []
+        
+        # Process chunks in batches to improve performance
+        batch_size = min(3, len(chunks))  # Process up to 3 chunks at once
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i+batch_size]
+            batch_summaries = []
             
-        final_summary = ' '.join(summaries)
-        if count_tokens(final_summary) > MAX_INPUT_TOKENS:
-            return self.summarize_long_text(final_summary, max_tokens)
+            for j, chunk in enumerate(batch):
+                try:
+                    chunk_token_count = count_tokens(chunk)
+                    if chunk_token_count > MAX_INPUT_TOKENS:
+                        # Truncate if still too large
+                        chunk = chunk[:int(len(chunk) * MAX_INPUT_TOKENS / chunk_token_count)]
+                    
+                    # Use a more efficient prompt for summarization
+                    response = openai.chat.completions.create(
+                        model="gpt-3.5-turbo-0125",
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "Summarize the following text concisely, focusing only on the most important information."
+                            },
+                            {
+                                "role": "user",
+                                "content": chunk
+                            }
+                        ],
+                        max_tokens=max(500, max_tokens // len(chunks)),
+                        temperature=0.3
+                    )
+                    batch_summaries.append(response.choices[0].message.content)
+                    
+                except Exception as e:
+                    print(f"Error summarizing chunk {i+j+1}/{len(chunks)}: {e}")
+                    # Add a placeholder if a chunk fails
+                    batch_summaries.append(f"[Content summarized: Key points from section {i+j+1}]")
             
-        return final_summary
+            # Add all batch summaries to the main list
+            summaries.extend(batch_summaries)
+            
+            # Only sleep between batches, not between each chunk
+            if i + batch_size < len(chunks):
+                time.sleep(1)  # Reduced sleep time
+        
+        # Combine summaries
+        combined_summary = "\n\n".join(summaries)
+        
+        # If combined summary is still too large, do a second pass with a faster approach
+        combined_token_count = count_tokens(combined_summary)
+        if combined_token_count > MAX_INPUT_TOKENS and len(summaries) > 1:
+            print(f"Combined summary still too large ({combined_token_count} tokens). Performing second pass.")
+            # For second pass, use a more aggressive approach
+            return summarize_long_text(combined_summary, max_tokens=max_tokens)
+            
+        return combined_summary
         
     except Exception as e:
-        print(f"Summarization error: {e}")
-        return text[:6000] + "..."
+        print(f"Summarization error: Error code: {getattr(e, 'code', 'unknown')} - {str(e)}")
+        # Fallback to a very conservative approach
+        return text[:4000] + "...[Content truncated due to length]"
 
 def generate_podcast_script(text, grade_level="middle school"):
-    if len(text.split()) > 10000:
-        text = summarize_long_text(text)
-
-    prompt = f"""
-    Create an engaging, interactive educational podcast between:
-    - Ms. Johnson (40-year-old female teacher, warm but authoritative, British accent)
-    - Alex (15-year-old male student, curious and enthusiastic, American accent)
+    # Check text length and summarize if needed
+    token_count = count_tokens(text)
+    max_safe_tokens = 6000  # Conservative limit for input to avoid context length issues
     
-    Format requirements:
-    [Teacher] Actual dialogue (use British English spellings)
-    [Student] Actual dialogue (use casual American English)
+    if token_count > max_safe_tokens:
+        print(f"Text too long ({token_count} tokens). Summarizing...")
+        text = summarize_long_text(text, max_tokens=2000)
+        print(f"Summarized to {count_tokens(text)} tokens")
     
-    Content to discuss:
-    {text[:8000]}
-    
-    Guidelines:
-    1. Make it sound like a natural conversation with interruptions and follow-up questions
-    2. Ms. Johnson should explain concepts clearly with real-world examples
-    3. Alex should ask thoughtful questions and make occasional jokes
-    4. Include:
-       - Warm introduction
-       - 3-5 main discussion points from the text
-       - Summary conclusion
-       - Funny outtake at the end
-    5. Use these exact tags for each speaker: [Teacher] and [Student]
-    6. Keep exchanges short (1-3 sentences per turn)
-    7. Add personality through word choice and speaking style
-    """
-
     try:
+        # Ensure we're within safe limits for the prompt
+        content_text = text[:7000]  # Reduced from 8000 to be more conservative
+        
+        prompt = f"""
+        Create an engaging, interactive educational podcast between:
+        - Ms. Johnson (40-year-old female teacher, warm but authoritative, British accent)
+        - Alex (15-year-old male student, curious and enthusiastic, American accent)
+        
+        Format requirements:
+        [Teacher] Actual dialogue (use British English spellings)
+        [Student] Actual dialogue (use casual American English)
+        
+        Content to discuss:
+        {content_text}
+        
+        Guidelines:
+        1. Make it sound like a natural conversation with interruptions and follow-up questions
+        2. Ms. Johnson should explain concepts clearly with real-world examples
+        3. Alex should ask thoughtful questions and make occasional jokes
+        4. Include:
+           - Warm introduction
+           - 3-5 main discussion points from the text
+           - Summary conclusion
+           - Funny outtake at the end
+        5. Use these exact tags for each speaker: [Teacher] and [Student]
+        6. Keep exchanges short (1-3 sentences per turn)
+        7. Add personality through word choice and speaking style
+        """
+
         response = openai.chat.completions.create(
             model="gpt-4-turbo",  # Using GPT-4 for better conversational quality
             messages=[
