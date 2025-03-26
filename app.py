@@ -159,7 +159,7 @@ def summarize_long_text(text, max_tokens=2000):
         # Add the last chunk if it has content
         if current_chunk:
             chunks.append('\n'.join(current_chunk))
-
+        
         # Optimize: If we have too many chunks, combine some to reduce API calls
         if len(chunks) > 10:
             print(f"Optimizing: Reducing {len(chunks)} chunks to improve performance")
@@ -204,7 +204,7 @@ def summarize_long_text(text, max_tokens=2000):
                     # Use a more efficient prompt for summarization
                     response = openai.chat.completions.create(
                         model="gpt-3.5-turbo-0125",
-                    messages=[
+                        messages=[
                             {
                                 "role": "system",
                                 "content": "Summarize the following text concisely, focusing only on the most important information."
@@ -213,13 +213,13 @@ def summarize_long_text(text, max_tokens=2000):
                                 "role": "user",
                                 "content": chunk
                             }
-                    ],
+                        ],
                         max_tokens=max(500, max_tokens // len(chunks)),
                         temperature=0.3
-                )
+                    )
                     batch_summaries.append(response.choices[0].message.content)
                     
-            except Exception as e:
+                except Exception as e:
                     print(f"Error summarizing chunk {i+j+1}/{len(chunks)}: {e}")
                     # Add a placeholder if a chunk fails
                     batch_summaries.append(f"[Content summarized: Key points from section {i+j+1}]")
@@ -240,7 +240,7 @@ def summarize_long_text(text, max_tokens=2000):
             print(f"Combined summary still too large ({combined_token_count} tokens). Performing second pass.")
             # For second pass, use a more aggressive approach
             return summarize_long_text(combined_summary, max_tokens=max_tokens)
-        
+            
         return combined_summary
         
     except Exception as e:
@@ -530,6 +530,6 @@ def cleanup_files():
                 os.unlink(filepath)
     except Exception as e:
         print(f"Cleanup error: {e}")
-        
+
 if __name__ == '__main__':
     app.run(debug=True)
