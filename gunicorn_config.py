@@ -1,6 +1,6 @@
-workers = 1  # Reduce number of workers for free tier
+workers = 1  
 worker_class = 'sync'
-timeout = 200  # Increase timeout for long-running tasks
-max_requests = 1000
-max_requests_jitter = 50
+timeout = 200  
+max_requests = 500
+max_requests_jitter = 25
 preload_app = True

@@ -35,6 +35,24 @@ openai.api_key = os.getenv('OPENAI_API_KEY')
 # Allowed extensions
 ALLOWED_EXTENSIONS = {'pdf', 'epub', 'docx'}
 
+@app.before_request
+def cleanup_files():
+    try:
+        now = time.time()
+        # Clean both upload and audio folders
+        for folder in [UPLOAD_FOLDER, AUDIO_FOLDER]:
+            if os.path.exists(folder):
+                for filename in os.listdir(folder):
+                    filepath = os.path.join(folder, filename)
+                    if os.path.isfile(filepath) and (now - os.path.getmtime(filepath)) > 7200:
+                        try:
+                            os.unlink(filepath)
+                            logging.info(f"Cleaned up file: {filepath}")
+                        except Exception as e:
+                            log_error(e, f"Failed to delete {filepath}")
+    except Exception as e:
+        log_error(e, "File cleanup")
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
