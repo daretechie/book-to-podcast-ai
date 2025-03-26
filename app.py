@@ -23,11 +23,26 @@ app.secret_key = os.urandom(24)
 
 # Configuration
 app.static_folder = 'static'
-UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
-AUDIO_FOLDER = os.path.join(UPLOAD_FOLDER, 'audio')
+UPLOAD_FOLDER = '/tmp/uploads'  # Use /tmp for Render
+AUDIO_FOLDER = '/tmp/audio'     # Use /tmp for Render
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(AUDIO_FOLDER, exist_ok=True)
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB
+app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024  # Reduce to 8MB for free tier
+
+# Cleanup function for temporary files
+def cleanup_temp_files():
+    for folder in [UPLOAD_FOLDER, AUDIO_FOLDER]:
+        for filename in os.listdir(folder):
+            filepath = os.path.join(folder, filename)
+            try:
+                if os.path.isfile(filepath) and time.time() - os.path.getmtime(filepath) > 3600:  # 1 hour
+                    os.remove(filepath)
+            except Exception as e:
+                print(f"Error cleaning up {filepath}: {e}")
+
+@app.before_request
+def before_request():
+    cleanup_temp_files()  # Clean old files before each request
 
 # OpenAI setup
 openai.api_key = os.getenv('OPENAI_API_KEY')
@@ -111,142 +126,73 @@ def count_tokens(text, model="gpt-3.5-turbo-0125"):
         return len(text) // 4
 
 def summarize_long_text(text, max_tokens=2000):
-    """Handle large texts safely within token limits"""
     try:
-        # Calculate available tokens for input (model limit - response tokens - buffer)
-        MODEL_MAX_TOKENS = 16000  # Reduced from 16385 to add more safety margin
-        SAFETY_BUFFER = 1000      # Increased from 500 for more safety
-        MAX_INPUT_TOKENS = MODEL_MAX_TOKENS - max_tokens - SAFETY_BUFFER
-        MAX_CHUNK_TOKENS = 8000   # Increased from 4000 for fewer API calls
+        encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
+        total_tokens = len(encoding.encode(text))
         
-        # For very large texts, do a quick initial truncation to save processing time
-        initial_token_count = count_tokens(text)
-        if initial_token_count > 100000:  # If extremely large
-            # Get a rough estimate of characters per token for this text
-            chars_per_token = len(text) / initial_token_count
-            # Truncate to approximately 50,000 tokens worth of text
-            safe_char_count = int(50000 * chars_per_token)
-            text = text[:safe_char_count]
-            print(f"Initial truncation: {initial_token_count} tokens → ~50000 tokens")
-        
-        # Split text into token-limited chunks
+        if total_tokens <= max_tokens:
+            return text
+
+        # More aggressive chunking for memory optimization
+        chunk_size = max_tokens // 2  # Smaller chunks
         chunks = []
-        paragraphs = [p for p in text.split('\n') if p.strip()]
-        
-        # Use larger chunks with fewer API calls
         current_chunk = []
-        current_token_count = 0
+        current_length = 0
         
-        for para in paragraphs:
-            para_tokens = count_tokens(para)
-            
-            # If adding this paragraph would exceed our chunk size
-            if current_token_count + para_tokens > MAX_CHUNK_TOKENS:
-                if current_chunk:  # If we have content, save this chunk
-                    chunks.append('\n'.join(current_chunk))
-                    current_chunk = []
-                    current_token_count = 0
-                
-                # If a single paragraph is too large, add it as its own chunk
-                if para_tokens > MAX_CHUNK_TOKENS:
-                    chunks.append(para[:int(len(para) * MAX_CHUNK_TOKENS / para_tokens)])
-                    continue
-            
-            # Add paragraph to current chunk
-            current_chunk.append(para)
-            current_token_count += para_tokens
+        for sentence in re.split(r'(?<=[.!?])\s+', text):
+            sentence_tokens = len(encoding.encode(sentence))
+            if current_length + sentence_tokens > chunk_size and current_chunk:
+                chunks.append(' '.join(current_chunk))
+                current_chunk = [sentence]
+                current_length = sentence_tokens
+            else:
+                current_chunk.append(sentence)
+                current_length += sentence_tokens
         
-        # Add the last chunk if it has content
         if current_chunk:
-            chunks.append('\n'.join(current_chunk))
-        
-        # Optimize: If we have too many chunks, combine some to reduce API calls
-        if len(chunks) > 10:
-            print(f"Optimizing: Reducing {len(chunks)} chunks to improve performance")
-            optimized_chunks = []
-            temp_chunk = []
-            temp_token_count = 0
-            
-            for chunk in chunks:
-                chunk_tokens = count_tokens(chunk)
-                if temp_token_count + chunk_tokens <= MAX_CHUNK_TOKENS:
-                    temp_chunk.append(chunk)
-                    temp_token_count += chunk_tokens
-                else:
-                    if temp_chunk:
-                        optimized_chunks.append('\n\n'.join(temp_chunk))
-                    temp_chunk = [chunk]
-                    temp_token_count = chunk_tokens
-            
-            if temp_chunk:
-                optimized_chunks.append('\n\n'.join(temp_chunk))
-            
-            chunks = optimized_chunks
-            print(f"Optimized to {len(chunks)} chunks")
-        
-        # Process each chunk with parallel processing if possible
-        print(f"Processing {len(chunks)} chunks for summarization")
+            chunks.append(' '.join(current_chunk))
+
+        # Process chunks with delay to avoid rate limits
         summaries = []
+        for chunk in chunks:
+            try:
+                response = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "Summarize the following text concisely while keeping important details:"},
+                        {"role": "user", "content": chunk}
+                    ],
+                    max_tokens=max_tokens,
+                    temperature=0.5
+                )
+                summaries.append(response.choices[0].message['content'].strip())
+                time.sleep(1)  # Rate limiting
+            except Exception as e:
+                print(f"Error processing chunk: {e}")
+                continue
+
+        # Combine summaries if needed
+        combined_summary = " ".join(summaries)
+        if len(encoding.encode(combined_summary)) > max_tokens:
+            try:
+                response = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "Create a final concise summary of these combined summaries:"},
+                        {"role": "user", "content": combined_summary}
+                    ],
+                    max_tokens=max_tokens,
+                    temperature=0.5
+                )
+                return response.choices[0].message['content'].strip()
+            except Exception as e:
+                print(f"Error in final summarization: {e}")
+                return combined_summary[:max_tokens*4]  # Fallback to truncation
         
-        # Process chunks in batches to improve performance
-        batch_size = min(3, len(chunks))  # Process up to 3 chunks at once
-        for i in range(0, len(chunks), batch_size):
-            batch = chunks[i:i+batch_size]
-            batch_summaries = []
-            
-            for j, chunk in enumerate(batch):
-                try:
-                    chunk_token_count = count_tokens(chunk)
-                    if chunk_token_count > MAX_INPUT_TOKENS:
-                        # Truncate if still too large
-                        chunk = chunk[:int(len(chunk) * MAX_INPUT_TOKENS / chunk_token_count)]
-                    
-                    # Use a more efficient prompt for summarization
-                    response = openai.chat.completions.create(
-                        model="gpt-3.5-turbo-0125",
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": "Summarize the following text concisely, focusing only on the most important information."
-                            },
-                            {
-                                "role": "user",
-                                "content": chunk
-                            }
-                        ],
-                        max_tokens=max(500, max_tokens // len(chunks)),
-                        temperature=0.3
-                    )
-                    batch_summaries.append(response.choices[0].message.content)
-                    
-                except Exception as e:
-                    print(f"Error summarizing chunk {i+j+1}/{len(chunks)}: {e}")
-                    # Add a placeholder if a chunk fails
-                    batch_summaries.append(f"[Content summarized: Key points from section {i+j+1}]")
-            
-            # Add all batch summaries to the main list
-            summaries.extend(batch_summaries)
-            
-            # Only sleep between batches, not between each chunk
-            if i + batch_size < len(chunks):
-                time.sleep(1)  # Reduced sleep time
-        
-        # Combine summaries
-        combined_summary = "\n\n".join(summaries)
-        
-        # If combined summary is still too large, do a second pass with a faster approach
-        combined_token_count = count_tokens(combined_summary)
-        if combined_token_count > MAX_INPUT_TOKENS and len(summaries) > 1:
-            print(f"Combined summary still too large ({combined_token_count} tokens). Performing second pass.")
-            # For second pass, use a more aggressive approach
-            return summarize_long_text(combined_summary, max_tokens=max_tokens)
-            
         return combined_summary
-        
     except Exception as e:
-        print(f"Summarization error: Error code: {getattr(e, 'code', 'unknown')} - {str(e)}")
-        # Fallback to a very conservative approach
-        return text[:4000] + "...[Content truncated due to length]"
+        print(f"Error in summarization: {e}")
+        return text[:max_tokens*4]  # Emergency fallback
 
 def generate_podcast_script(text, grade_level="middle school"):
     # Check text length and summarize if needed
@@ -288,7 +234,7 @@ def generate_podcast_script(text, grade_level="middle school"):
         7. Add personality through word choice and speaking style
         """
 
-        response = openai.chat.completions.create(
+        response = openai.ChatCompletion.create(
             model="gpt-4-turbo",  # Using GPT-4 for better conversational quality
             messages=[
                 {"role": "system", "content": "You are a talented podcast script writer specializing in educational content."},
@@ -444,33 +390,45 @@ def upload_file():
     except Exception as e:
         return jsonify({'success': False, 'error': f"Server error: {str(e)}"})
 
-@app.route('/generate_podcast/<book_title>', methods=['GET'])
-def generate_podcast(book_title):
+@app.route('/generate_podcast/<grade_level>', methods=['POST'])
+def generate_podcast(grade_level):
     try:
-        book_path = os.path.join(UPLOAD_FOLDER, f"{book_title}.txt")
-        if not os.path.exists(book_path):
-            return jsonify({'success': False, 'error': 'Book not found'})
+        cleanup_temp_files()  # Clean up before processing
+        if 'text' not in session:
+            return jsonify({'error': 'No text found in session'}), 400
 
-        with open(book_path, 'r', encoding='utf-8') as f:
-            book_content = f.read()
-        
-        script, _ = generate_podcast_script(book_content)
+        text = session['text']
+        if not text:
+            return jsonify({'error': 'Empty text'}), 400
+
+        # Limit text size for free tier
+        max_text_length = 50000  # ~50KB
+        if len(text) > max_text_length:
+            text = text[:max_text_length]
+
+        # Generate podcast script with memory-optimized summarization
+        script = generate_podcast_script(text, grade_level)
         if not script:
-            return jsonify({'success': False, 'error': 'Failed to generate script'})
-        
-        audio = text_to_speech_with_voices(script)
-        if not audio:
-            return jsonify({'success': False, 'error': 'Failed to generate audio'})
-        
-        return jsonify({
-            'success': True,
-            'podcast': {
-                'script': script,
-                'audio_base64': audio
-            }
-        })
+            return jsonify({'error': 'Failed to generate script'}), 500
+
+        # Generate audio with error handling
+        try:
+            tts = gTTS(text=script, lang='en', slow=False)
+            audio_path = os.path.join(AUDIO_FOLDER, f'podcast_{int(time.time())}.mp3')
+            tts.save(audio_path)
+            
+            with open(audio_path, 'rb') as audio_file:
+                audio_data = base64.b64encode(audio_file.read()).decode('utf-8')
+            
+            os.remove(audio_path)  # Clean up immediately after use
+            return jsonify({'audio': audio_data, 'script': script})
+        except Exception as e:
+            print(f"Error generating audio: {e}")
+            return jsonify({'error': 'Failed to generate audio'}), 500
+
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        print(f"Error in generate_podcast: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -492,8 +450,8 @@ def chat():
         conversation_history = session.get('conversation_history', [])
         conversation_history.append({"role": "user", "content": message})
         
-        response = openai.chat.completions.create(
-            model="gpt-3.5-turbo-0125",
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
             messages=[
                 {
                     "role": "system", 
@@ -518,18 +476,6 @@ def chat():
         })
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
-
-# Cleanup middleware
-@app.before_request
-def cleanup_files():
-    try:
-        now = time.time()
-        for filename in os.listdir(UPLOAD_FOLDER):
-            filepath = os.path.join(UPLOAD_FOLDER, filename)
-            if os.path.isfile(filepath) and (now - os.path.getmtime(filepath)) > 3600:
-                os.unlink(filepath)
-    except Exception as e:
-        print(f"Cleanup error: {e}")
 
 if __name__ == '__main__':
     app.run(debug=True)
