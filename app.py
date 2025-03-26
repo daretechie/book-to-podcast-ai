@@ -3,7 +3,6 @@ import os
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 import PyPDF2
-import pdftotext
 import docx
 import ebooklib
 from ebooklib import epub
@@ -62,6 +61,7 @@ def extract_text_from_pdf(file_path):
 def extract_text_from_pdf_fallback(file_path):
     """Fallback PDF extraction method"""
     try:
+        import pdftotext
         with open(file_path, "rb") as f:
             pdf = pdftotext.PDF(f)
         return "\n\n".join(pdf)
