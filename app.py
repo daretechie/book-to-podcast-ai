@@ -305,7 +305,7 @@ def generate_podcast_script(text, grade_level="middle school"):
         3. Alex should ask thoughtful questions and make occasional jokes
         4. Include:
            - Warm introduction
-           - 8-20 main discussion points from the text
+           - At least 10 or more main discussion points from the text
            - Summary conclusion
            - Funny outtake at the end
         5. Use these exact tags for each speaker: [Teacher] and [Student]
