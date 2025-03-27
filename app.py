@@ -8,11 +8,16 @@ import ebooklib
 from ebooklib import epub
 import re
 import openai
-from gtts import gTTS
+from openai import AsyncOpenAI
 import time
 from io import BytesIO
 import base64
 import tiktoken
+from pydub import AudioSegment
+from functools import lru_cache
+from tenacity import retry, stop_after_attempt, wait_exponential
+import logging
+import asyncio
 
 # Load environment variables
 load_dotenv()
@@ -30,7 +35,27 @@ os.makedirs(AUDIO_FOLDER, exist_ok=True)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB
 
 # OpenAI setup
-openai.api_key = os.getenv('OPENAI_API_KEY')
+aclient = AsyncOpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Voice configuration
+VOICE_CONFIG = {
+    'teacher': {
+        'voice': 'nova', 
+        'speed': 0.95,
+        'instructions': "Speak with warmth, authority and clarity. Use British English. Pause briefly after questions.",
+        'pause_after': 500  
+    },
+    'student': {
+        'voice': 'echo',
+        'speed': 1.1,
+        'instructions': "Sound playful and eager, enthusiastic, curious and slightly hesitant. 15-year-old male student, Use American English. Slightly faster pace.",
+        'pause_after': 300
+    }
+}
 
 # Allowed extensions
 ALLOWED_EXTENSIONS = {'pdf', 'epub', 'docx'}
@@ -124,10 +149,10 @@ def summarize_long_text(text, max_tokens=2000):
         if initial_token_count > 100000:  # If extremely large
             # Get a rough estimate of characters per token for this text
             chars_per_token = len(text) / initial_token_count
-            # Truncate to approximately 50,000 tokens worth of text
-            safe_char_count = int(50000 * chars_per_token)
+            # Truncate to approximately 70,000 tokens worth of text
+            safe_char_count = int(70000 * chars_per_token)
             text = text[:safe_char_count]
-            print(f"Initial truncation: {initial_token_count} tokens → ~50000 tokens")
+            print(f"Initial truncation: {initial_token_count} tokens → ~70000 tokens")
         
         # Split text into token-limited chunks
         chunks = []
@@ -251,7 +276,7 @@ def summarize_long_text(text, max_tokens=2000):
 def generate_podcast_script(text, grade_level="middle school"):
     # Check text length and summarize if needed
     token_count = count_tokens(text)
-    max_safe_tokens = 6000  # Conservative limit for input to avoid context length issues
+    max_safe_tokens = 7000  # Conservative limit for input to avoid context length issues
     
     if token_count > max_safe_tokens:
         print(f"Text too long ({token_count} tokens). Summarizing...")
@@ -260,7 +285,7 @@ def generate_podcast_script(text, grade_level="middle school"):
     
     try:
         # Ensure we're within safe limits for the prompt
-        content_text = text[:7000]
+        content_text = text[:8000]
         
         prompt = f"""
         Create an engaging, interactive educational podcast between:
@@ -280,7 +305,7 @@ def generate_podcast_script(text, grade_level="middle school"):
         3. Alex should ask thoughtful questions and make occasional jokes
         4. Include:
            - Warm introduction
-           - 5-10 main discussion points from the text
+           - 8-20 main discussion points from the text
            - Summary conclusion
            - Funny outtake at the end
         5. Use these exact tags for each speaker: [Teacher] and [Student]
@@ -289,13 +314,13 @@ def generate_podcast_script(text, grade_level="middle school"):
         """
 
         response = openai.chat.completions.create(
-            model="gpt-4-turbo",  # Using GPT-4 for better conversational quality
+            model="gpt-4-turbo",
             messages=[
                 {"role": "system", "content": "You are a talented podcast script writer specializing in educational content."},
                 {"role": "user", "content": prompt}
             ],
             max_tokens=2500,
-            temperature=0.8,  # Slightly higher for more creative responses
+            temperature=0.8,
             top_p=0.9
         )
         
@@ -305,128 +330,101 @@ def generate_podcast_script(text, grade_level="middle school"):
         script = re.sub(r'\[Teacher\]\s*', '[Teacher] ', script)
         script = re.sub(r'\[Student\]\s*', '[Student] ', script)
         
-        # Add some metadata about the voices
-        voice_metadata = {
-            "teacher": {
-                "name": "Ms. Johnson",
-                "gender": "female",
-                "accent": "British",
-                "pace": "moderate",
-                "tone": "warm, authoritative"
-            },
-            "student": {
-                "name": "Alex",
-                "gender": "male",
-                "accent": "American",
-                "pace": "slightly faster",
-                "tone": "enthusiastic, curious"
-            }
-        }
-        
-        return script, voice_metadata
+        return script, None
         
     except Exception as e:
         print(f"Script generation error: {e}")
         return None, None
 
-def text_to_speech_with_voices(script):
-    """Convert podcast script to audio with retries and fallback"""
+@retry(stop=stop_after_attempt(3), 
+      wait=wait_exponential(multiplier=1, min=4, max=10))
+@lru_cache(maxsize=500)
+async def generate_speech(text: str, role: str) -> AudioSegment:
+    """Generate speech for a single dialogue line"""
     try:
-        # Process script to maintain conversation order
-        dialogue_parts = []
-        lines = script.split('\n')
+        response = await aclient.audio.speech.create(
+            model="tts-1-hd",
+            voice=VOICE_CONFIG[role]['voice'],
+            input=text,
+            speed=VOICE_CONFIG[role]['speed'],
+            response_format="mp3"
+        )
         
-        # Extract dialogue parts with speaker information
+        # Stream the audio directly to memory
+        audio_bytes = b''
+        async for chunk in await response.aiter_bytes():
+            audio_bytes += chunk
+            
+        return AudioSegment.from_mp3(BytesIO(audio_bytes))
+        
+    except Exception as e:
+        logger.error(f"Error generating speech for {role}: {str(e)}")
+        return None
+
+async def generate_conversation_audio(script: str) -> str:
+    """
+    Generate interactive conversation audio with natural pacing
+    Returns base64 encoded MP3
+    """
+    if not script:
+        return None
+
+    try:
+        # Parse the script into dialogue turns
+        dialogue = []
         current_speaker = None
-        current_text = ""
+        current_text = []
         
-        for line in lines:
+        for line in script.split('\n'):
             line = line.strip()
-            if not line:
-                continue
-                
             if line.startswith('[Teacher]'):
-                if current_speaker and current_text:
-                    dialogue_parts.append((current_speaker, current_text))
-                    current_text = ""
-                
+                if current_speaker:
+                    dialogue.append((current_speaker, ' '.join(current_text)))
                 current_speaker = 'teacher'
-                current_text = line[9:].strip()
+                current_text = [line[9:].strip()]
             elif line.startswith('[Student]'):
-                if current_speaker and current_text:
-                    dialogue_parts.append((current_speaker, current_text))
-                    current_text = ""
-                
+                if current_speaker:
+                    dialogue.append((current_speaker, ' '.join(current_text)))
                 current_speaker = 'student'
-                current_text = line[9:].strip()
+                current_text = [line[9:].strip()]
             elif current_speaker:
-                current_text += " " + line
+                current_text.append(line.strip())
         
         if current_speaker and current_text:
-            dialogue_parts.append((current_speaker, current_text))
-        
-        # Generate audio with retries
-        combined = BytesIO()
-        max_retries = 3
-        
-        for speaker, text in dialogue_parts:
-            if not text.strip():
+            dialogue.append((current_speaker, ' '.join(current_text)))
+
+        # Generate audio for each dialogue turn with proper pacing
+        combined_audio = None
+        for speaker, text in dialogue:
+            segment = await generate_speech(text, speaker)
+            if not segment:
                 continue
                 
-            part_audio = BytesIO()
-            success = False
+            if not combined_audio:
+                combined_audio = segment
+            else:
+                # Add appropriate pause between turns
+                pause_duration = VOICE_CONFIG[speaker]['pause_after']
+                combined_audio += AudioSegment.silent(duration=pause_duration) + segment
+
+        if combined_audio:
+            output = BytesIO()
+            combined_audio.export(output, format="mp3", bitrate="192k")
+            return base64.b64encode(output.getvalue()).decode('utf-8')
             
-            # Try gTTS with retries
-            for attempt in range(max_retries):
-                try:
-                    tts = gTTS(
-                        text=text,
-                        lang='en',
-                        tld='co.uk' if speaker == 'teacher' else 'us',
-                        slow=False,
-                        lang_check=False
-                    )
-                    tts.write_to_fp(part_audio)
-                    success = True
-                    break
-                except Exception as e:
-                    print(f"TTS attempt {attempt + 1} failed: {e}")
-                    time.sleep(2 ** attempt)  # Exponential backoff
-            
-            if not success:
-                # Fallback to pyttsx3 if gTTS fails
-                try:
-                    import pyttsx3
-                    engine = pyttsx3.init()
-                    
-                    # Set voice properties
-                    voices = engine.getProperty('voices')
-                    if speaker == 'teacher':
-                        engine.setProperty('voice', voices[1].id)  # Female voice
-                        engine.setProperty('rate', 150)  # Slower pace
-                    else:
-                        engine.setProperty('voice', voices[0].id)  # Male voice
-                        engine.setProperty('rate', 180)  # Faster pace
-                    
-                    engine.save_to_file(text, 'temp.mp3')
-                    engine.runAndWait()
-                    
-                    with open('temp.mp3', 'rb') as f:
-                        part_audio.write(f.read())
-                    os.remove('temp.mp3')
-                except Exception as e:
-                    print(f"Fallback TTS failed: {e}")
-                    continue
-            
-            part_audio.seek(0)
-            combined.write(part_audio.getvalue())
-            combined.write(b'\x00' * 22050)
-        
-        combined.seek(0)
-        return base64.b64encode(combined.getvalue()).decode()
-    
     except Exception as e:
-        print(f"TTS generation error: {e}")
+        logger.error(f"Conversation generation failed: {str(e)}")
+    
+    return None
+
+def text_to_speech_with_voices(script: str) -> str:
+    """
+    Wrapper to run the async conversation generator
+    """
+    try:
+        return asyncio.run(generate_conversation_audio(script))
+    except Exception as e:
+        logger.error(f"Async conversation error: {str(e)}")
         return None
 
 # Routes
