@@ -330,7 +330,7 @@ def generate_podcast_script(text, grade_level="middle school"):
         return None, None
 
 def text_to_speech_with_voices(script):
-    """Enhanced TTS with better voice differentiation"""
+    """Convert podcast script to audio with retries and fallback"""
     try:
         # Process script to maintain conversation order
         dialogue_parts = []
@@ -346,50 +346,81 @@ def text_to_speech_with_voices(script):
                 continue
                 
             if line.startswith('[Teacher]'):
-                # Save previous speaker's text
                 if current_speaker and current_text:
                     dialogue_parts.append((current_speaker, current_text))
                     current_text = ""
                 
                 current_speaker = 'teacher'
-                current_text = line[9:].strip()  # Remove tag
+                current_text = line[9:].strip()
             elif line.startswith('[Student]'):
-                # Save previous speaker's text
                 if current_speaker and current_text:
                     dialogue_parts.append((current_speaker, current_text))
                     current_text = ""
                 
                 current_speaker = 'student'
-                current_text = line[9:].strip()  # Remove tag
-            elif current_speaker:  # Continue previous speaker's text
+                current_text = line[9:].strip()
+            elif current_speaker:
                 current_text += " " + line
         
-        # Add the last dialogue part
         if current_speaker and current_text:
             dialogue_parts.append((current_speaker, current_text))
         
-        # Generate audio for each dialogue part in sequence
+        # Generate audio with retries
         combined = BytesIO()
+        max_retries = 3
         
         for speaker, text in dialogue_parts:
             if not text.strip():
                 continue
                 
             part_audio = BytesIO()
-            tts = gTTS(
-                text=text,
-                lang='en',
-                tld='co.uk' if speaker == 'teacher' else 'us',
-                slow=False,
-                lang_check=False
-            )
-            tts.write_to_fp(part_audio)
-            part_audio.seek(0)
+            success = False
             
-            # Add to combined audio
+            # Try gTTS with retries
+            for attempt in range(max_retries):
+                try:
+                    tts = gTTS(
+                        text=text,
+                        lang='en',
+                        tld='co.uk' if speaker == 'teacher' else 'us',
+                        slow=False,
+                        lang_check=False
+                    )
+                    tts.write_to_fp(part_audio)
+                    success = True
+                    break
+                except Exception as e:
+                    print(f"TTS attempt {attempt + 1} failed: {e}")
+                    time.sleep(2 ** attempt)  # Exponential backoff
+            
+            if not success:
+                # Fallback to pyttsx3 if gTTS fails
+                try:
+                    import pyttsx3
+                    engine = pyttsx3.init()
+                    
+                    # Set voice properties
+                    voices = engine.getProperty('voices')
+                    if speaker == 'teacher':
+                        engine.setProperty('voice', voices[1].id)  # Female voice
+                        engine.setProperty('rate', 150)  # Slower pace
+                    else:
+                        engine.setProperty('voice', voices[0].id)  # Male voice
+                        engine.setProperty('rate', 180)  # Faster pace
+                    
+                    engine.save_to_file(text, 'temp.mp3')
+                    engine.runAndWait()
+                    
+                    with open('temp.mp3', 'rb') as f:
+                        part_audio.write(f.read())
+                    os.remove('temp.mp3')
+                except Exception as e:
+                    print(f"Fallback TTS failed: {e}")
+                    continue
+            
+            part_audio.seek(0)
             combined.write(part_audio.getvalue())
-            # Add a brief pause between speakers
-            combined.write(b'\x00' * 22050)  # 0.5s silence
+            combined.write(b'\x00' * 22050)
         
         combined.seek(0)
         return base64.b64encode(combined.getvalue()).decode()

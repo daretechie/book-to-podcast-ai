@@ -9,4 +9,5 @@ python-dotenv
 tiktoken
 gTTS
 gunicorn
+pyttsx3
 
