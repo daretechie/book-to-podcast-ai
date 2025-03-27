@@ -260,7 +260,7 @@ def generate_podcast_script(text, grade_level="middle school"):
     
     try:
         # Ensure we're within safe limits for the prompt
-        content_text = text[:7000]  # Reduced from 8000 to be more conservative
+        content_text = text[:7000]
         
         prompt = f"""
         Create an engaging, interactive educational podcast between:
@@ -280,7 +280,7 @@ def generate_podcast_script(text, grade_level="middle school"):
         3. Alex should ask thoughtful questions and make occasional jokes
         4. Include:
            - Warm introduction
-           - 3-5 main discussion points from the text
+           - 5-10 main discussion points from the text
            - Summary conclusion
            - Funny outtake at the end
         5. Use these exact tags for each speaker: [Teacher] and [Student]
