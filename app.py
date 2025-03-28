@@ -289,7 +289,7 @@ def generate_podcast_script(text, grade_level="middle school"):
         
         prompt = f"""
         Create an engaging, interactive educational podcast between:
-        - Ms. Johnson (40-year-old female teacher, warm but authoritative, British accent)
+        - Ms. Ann (40-year-old female teacher, warm but authoritative, British accent)
         - Alex (15-year-old male student, curious and enthusiastic, American accent)
         
         Format requirements:
@@ -301,8 +301,8 @@ def generate_podcast_script(text, grade_level="middle school"):
         
         Guidelines:
         1. Make it sound like a natural conversation with interruptions and follow-up questions
-        2. Ms. Johnson should explain concepts clearly with real-world examples
-        3. Alex should ask thoughtful questions and make occasional jokes
+        2. Ms. Ann should explain concepts clearly with real-world examples
+        3. Adam should ask thoughtful questions and make occasional jokes
         4. Include:
            - Warm introduction
            - At least 10 or more main discussion points from the text
