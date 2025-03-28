@@ -176,3 +176,4 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 templates/keep.py
+TECHNICAL_DOCUMENTATION.md
