@@ -290,7 +290,7 @@ def generate_podcast_script(text, grade_level="middle school"):
         prompt = f"""
         Create an engaging, interactive educational podcast between:
         - Ms. Ann (40-year-old female teacher, warm but authoritative, British accent)
-        - Alex (15-year-old male student, curious and enthusiastic, American accent)
+        - Adam (15-year-old male student, curious and enthusiastic, American accent)
         
         Format requirements:
         [Teacher] Actual dialogue (use British English spellings)
