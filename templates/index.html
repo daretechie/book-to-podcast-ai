@@ -4,8 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Book-to-Podcast Explorer</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&display=swap" rel="stylesheet" />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/style.css') }}"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div class="container">
@@ -19,7 +25,9 @@
           <h2>Upload a Book</h2>
           <form id="upload-form" enctype="multipart/form-data">
             <div class="file-input">
-              <label for="book-file">Choose a book file (PDF, EPUB, DOCX)</label>
+              <label for="book-file"
+                >Choose a book file (PDF, EPUB, DOCX)</label
+              >
               <input
                 type="file"
                 id="book-file"
@@ -40,7 +48,9 @@
               </select>
             </div>
 
-            <button type="submit" class="primary-button">Upload and Process</button>
+            <button type="submit" class="primary-button">
+              Upload and Process
+            </button>
           </form>
         </div>
       </div>
@@ -61,7 +71,11 @@
             </div>
 
             <div class="audio-container" style="display: none">
-              <audio id="audioPlayer" controls style="width: 100%; margin: 5px 0;"></audio>
+              <audio
+                id="audioPlayer"
+                controls
+                style="width: 100%; margin: 5px 0"
+              ></audio>
               <div class="button-container">
                 <button id="generateButton" class="primary-button">
                   🎙️ Generate Podcast
@@ -92,6 +106,12 @@
         </div>
       </div>
     </div>
+
+    <footer
+      style="text-align: center; padding: 10px; font-size: 0.9em; color: #777"
+    >
+      <p>&copy; 2025 StackJunior Book To Podcast AI. All rights reserved.</p>
+    </footer>
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
   </body>
